@@ -1,0 +1,55 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TLS 证书检查</title><style>
+body{font-family:-apple-system,"PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;background:#f5f7fa;color:#1f2937;margin:0}
+.wrap{max-width:900px;margin:32px auto;padding:0 16px}h1{font-size:22px}
+form{display:flex;gap:8px;flex-wrap:wrap}input[type=text]{flex:1;min-width:240px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:15px}
+button{padding:10px 18px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:15px;cursor:pointer}button:disabled{opacity:.5}
+.card{background:#fff;border-radius:10px;padding:16px 20px;margin-top:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:14px}.kv div:nth-child(odd){color:#64748b}
+.ok{color:#16a34a}.warn{color:#d97706}.bad{color:#dc2626}.err{background:#fef2f2;color:#b91c1c}
+.alert{background:#fff7ed;border-left:4px solid #ea580c}code,.mono{font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{border-bottom:1px solid #e5e7eb;padding:6px;text-align:left;vertical-align:top}
+.chain li{margin-bottom:8px;font-size:13px}label{font-size:14px;align-self:center}
+</style></head><body><div class="wrap">
+<h1>🔒 TLS 证书检查</h1>
+<form id="f"><input type="text" id="d" placeholder="输入域名，如 github.com 或 example.com:8443" autofocus>
+<label><input type="checkbox" id="ct"> 同时查询 crt.sh 透明日志</label><button id="b">检查</button></form>
+<div id="out"></div><div id="ctout"></div>
+<div class="card"><b>📧 到期邮件提醒</b><p style="font-size:13px;color:#64748b">剩余 30/14/7/1 天及 CA 退出时提醒；需点击确认邮件后生效，每封邮件可一键退订。</p>
+<form id="sf"><input type="text" id="se" placeholder="邮箱"><input type="text" id="sd" placeholder="域名"><button>订阅</button></form><div id="smsg" style="margin-top:8px;font-size:14px"></div></div></div>
+<script>
+const $=s=>document.querySelector(s),esc=s=>String(s??'—').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=s=>s?new Date(s).toLocaleString('zh-CN',{hour12:false}):'—';
+$('#f').onsubmit=async e=>{e.preventDefault();const d=$('#d').value.trim();if(!d)return;$('#b').disabled=true;
+$('#out').innerHTML='<div class="card">正在握手…</div>';$('#ctout').innerHTML='';
+if($('#ct').checked)loadCT(d);
+try{const r=await fetch('/api/check?domain='+encodeURIComponent(d)),j=await r.json();
+if(!r.ok)throw new Error(j.error||r.status);render(j)}catch(x){$('#out').innerHTML=`<div class="card err">❌ ${esc(x.message)}</div>`}
+$('#b').disabled=false};
+function render(j){const l=j.leaf,dl=l.days_left,cls=dl<0?'bad':dl<30?'warn':'ok';let h='';
+if(j.exiting_ca.length){h+=`<div class="card alert"><b>⚠️ 该证书由正在退出 SSL/TLS 业务的 CA 签发：${j.exiting_ca.map(c=>esc(c.name)).join('、')}</b>
+<p>${j.exiting_ca.map(c=>`${esc(c.reason)}（<a href="${esc(c.reference)}" target="_blank">来源</a>）`).join('<br>')}</p>
+<b>迁移建议</b><ol>${j.migration_steps.map(s=>`<li>${esc(s)}</li>`).join('')}</ol></div>`}
+else h+=`<div class="card ok">✅ 未发现由退出 CA 签发</div>`;
+h+=`<div class="card"><div class="kv">
+<div>域名</div><div>${esc(j.domain)}:${j.port}（${esc(j.tls_version)}）</div>
+<div>信任校验</div><div class="${j.verified?'ok':'bad'}">${j.verified?'通过':'失败：'+esc(j.verify_error)}</div>
+<div>签发 CA</div><div><b>${esc(l.issuer_org)}</b></div>
+<div>完整颁发者</div><div class="mono">${esc(l.issuer)}</div>
+<div>主体</div><div class="mono">${esc(l.subject)}</div>
+<div>生效时间</div><div>${fmt(l.not_before)}</div>
+<div>到期时间</div><div>${fmt(l.not_after)}</div>
+<div>剩余天数</div><div class="${cls}"><b>${dl} 天</b></div>
+<div>SAN</div><div class="mono">${esc(l.san.slice(0,10).join(', '))}${l.san.length>10?' …':''}</div></div></div>
+<div class="card"><b>证书链（服务器发送 ${j.chain.length} 张）</b><ol class="chain">${j.chain.map(c=>`<li><b>${esc(c.subject_cn||c.subject)}</b><br>
+<span class="mono">颁发者：${esc(c.issuer)}</span><br>有效期至 ${fmt(c.not_after)}（${c.days_left} 天）</li>`).join('')}</ol></div>`;
+$('#out').innerHTML=h}
+async function loadCT(d){$('#ctout').innerHTML='<div class="card">正在查询 crt.sh（可能需要十几秒）…</div>';
+try{const r=await fetch('/api/ct?domain='+encodeURIComponent(d)),j=await r.json();if(!r.ok)throw new Error(j.error);
+$('#ctout').innerHTML=`<div class="card"><b>crt.sh 未过期证书（共 ${j.total} 条，显示最近 ${j.items.length} 条）</b><table><tr><th>ID</th><th>签发时间</th><th>到期</th><th>名称</th><th>颁发者</th></tr>
+${j.items.map(i=>`<tr><td><a href="https://crt.sh/?id=${i.id}" target="_blank">${i.id}</a></td><td>${esc(i.not_before?.slice(0,10))}</td><td>${esc(i.not_after?.slice(0,10))}</td><td class="mono">${esc(i.name_value)}</td><td class="mono">${esc(i.issuer_name)}</td></tr>`).join('')}</table></div>`}
+catch(x){$('#ctout').innerHTML=`<div class="card err">crt.sh：${esc(x.message)}</div>`}}
+$('#sf').onsubmit=async e=>{e.preventDefault();$('#smsg').textContent='提交中…';
+try{const r=await fetch('/api/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:$('#se').value,domain:$('#sd').value||$('#d').value})}),j=await r.json();
+$('#smsg').innerHTML=r.ok?'<span class="ok">'+esc(j.message)+'</span>':'<span class="bad">'+esc(j.error)+'</span>'}catch(x){$('#smsg').textContent=x.message}};
+</script></body></html>

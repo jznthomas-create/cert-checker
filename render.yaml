@@ -1,0 +1,19 @@
+# Render Blueprint：仓库根目录放此文件，Dashboard → New → Blueprint 选择仓库
+services:
+  - type: web
+    name: cert-checker
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /
+    envVars:
+      - key: BASE_URL
+        value: https://cert-checker.onrender.com   # 部署后改成实际域名
+      - key: RATE_LIMIT_PER_MIN
+        value: "20"
+      - key: CRON_SECRET
+        generateValue: true
+      - key: MAIL_FROM
+        sync: false
+      - key: RESEND_API_KEY      # 或改用 SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS
+        sync: false

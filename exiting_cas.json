@@ -1,0 +1,17 @@
+{
+  "_comment": "正在退出公共 SSL/TLS 证书业务的 CA。match 为对颁发者 O/CN 的不区分大小写子串匹配，可自行增删。",
+  "cas": [
+    {
+      "name": "eMudhra",
+      "match": ["emudhra"],
+      "reason": "eMudhra 宣布退出全球 SSL/TLS 证书业务",
+      "reference": "https://emudhra.com/en/press-release/emudhra-to-exit-global-ssl-tls-certificate-business"
+    },
+    {
+      "name": "Entrust（公共 TLS，已被主流浏览器停止信任）",
+      "match": ["entrust"],
+      "reason": "Chrome/Mozilla 等自 2024-11 起不再信任 Entrust 新签发的 TLS 证书，Entrust 已将公共 TLS 业务转给 Sectigo",
+      "reference": "https://security.googleblog.com/2024/06/sustaining-digital-certificate-security.html"
+    }
+  ]
+}

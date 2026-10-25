@@ -1,0 +1,12 @@
+# 免费方案下 Render 无免费 Cron Job，用 GitHub Actions 每天唤醒并触发检查
+name: daily-cert-check
+on:
+  schedule: [{ cron: "0 1 * * *" }]   # UTC 01:00 = 北京时间 09:00
+  workflow_dispatch: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -fsS -m 120 --retry 3 --retry-delay 30 -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" "${{ secrets.APP_URL }}/api/cron/run"
