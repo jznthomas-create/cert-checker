@@ -180,3 +180,8 @@ def ct(domain: str = Query(...)):
     except Exception as e: return JSONResponse({"error": f"crt.sh 查询失败：{e}"}, 502)
     rows.sort(key=lambda x: x.get("not_before", ""), reverse=True)
     return {"domain": d, "total": len(rows), "items": [{k: x.get(k) for k in ("id","issuer_name","common_name","name_value","not_before","not_after")} for x in rows[:30]]}
+
+@app.get("/api/health")
+def health():
+    try: return {"ok": True, "storage": db.stats()}
+    except Exception as e: return JSONResponse({"ok": False, "storage_backend": db.backend(), "error": type(e).__name__}, 500)
