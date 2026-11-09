@@ -188,6 +188,14 @@ def cron_weekly(request: Request, force: int = 0):
     for x in r["results"]: x["to"] = _mask(x["to"])   # 日志公开，脱敏
     return r
 
+@app.post("/api/cron/admin-confirm")
+def admin_confirm(request: Request, payload: dict = Body(...)):
+    """运维用：凭 CRON_SECRET 直接确认某邮箱的全部待确认订阅（用于站长自测）。"""
+    if not _cron_ok(request): return JSONResponse({"error": "forbidden"}, 403)
+    email = str(payload.get("email", "")).strip().lower()
+    if not EMAIL_RE.match(email): return JSONResponse({"error": "邮箱格式无效"}, 400)
+    return {"confirmed": db.confirm_email(email)}
+
 @app.get("/api/site")
 def site(domain: str = Query(...)):
     """域名到期（RDAP，带缓存）+ 首页健康状况。"""

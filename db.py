@@ -103,3 +103,8 @@ def unsubscribe_all(token):
         if not r: return None, 0
         cur.execute(_q("DELETE FROM subscriptions WHERE email=?", ph), (r["email"],))
         return r["email"], cur.rowcount
+
+def confirm_email(email):
+    with conn() as (cur, ph):
+        cur.execute(_q("UPDATE subscriptions SET verified=1, confirm_token=NULL WHERE email=? AND verified=0", ph), (email,))
+        return cur.rowcount

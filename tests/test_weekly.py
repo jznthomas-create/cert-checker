@@ -155,3 +155,9 @@ def test_mailer_resend_id(monkeypatch):
     assert mailer.send("a@x.com", "s", "b", html="<b>b</b>") == "abc"
     monkeypatch.setattr(mailer.httpx, "post", lambda *a, **k: httpx.Response(403, json={"message": "only own email"}))
     assert mailer.send("a@x.com", "s", "b") is False and "403" in mailer.last_error
+
+def test_admin_confirm():
+    db.add("o@x.com", "a.com"); db.add("o@x.com", "b.com")
+    assert c.post("/api/cron/admin-confirm", json={"email": "o@x.com"}).status_code == 403
+    assert c.post("/api/cron/admin-confirm", json={"email": "o@x.com"}, headers={"x-cron-secret": "s3cret"}).json()["confirmed"] == 2
+    assert len(db.verified()) == 2
