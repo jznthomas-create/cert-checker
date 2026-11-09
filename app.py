@@ -160,14 +160,44 @@ def unsubscribe(token: str):
     r = db.unsubscribe(token)
     return page(f"已退订 {r['domain']}" if r else "链接无效或已退订")
 
+@app.get("/api/unsubscribe-all")
+def unsubscribe_all(token: str):
+    email, n = db.unsubscribe_all(token)
+    return page(f"已退订该邮箱的全部 {n} 个域名" if email else "链接无效或已退订")
+
+def _cron_ok(request: Request):
+    sec = os.getenv("CRON_SECRET")
+    return bool(sec) and _secrets.compare_digest(request.headers.get("x-cron-secret", ""), sec)
+
 @app.post("/api/cron/run")
 def cron_run(request: Request):
     """供外部定时器（GitHub Actions / cron-job.org）调用的每日检查入口，需 CRON_SECRET。"""
-    sec = os.getenv("CRON_SECRET")
-    if not sec or not _secrets.compare_digest(request.headers.get("x-cron-secret", ""), sec):
-        return JSONResponse({"error": "forbidden"}, 403)
+    if not _cron_ok(request): return JSONResponse({"error": "forbidden"}, 403)
     import check_expiry
     return check_expiry.run()
+
+def _mask(email):
+    u, _, d = email.partition("@"); return (u[:1] + "***@" + d) if d else "***"
+
+@app.post("/api/cron/weekly")
+def cron_weekly(request: Request, force: int = 0):
+    """每周健康周报入口（GitHub Actions 每周一调用），需 CRON_SECRET；force=1 忽略 6 天内已发送的限制。"""
+    if not _cron_ok(request): return JSONResponse({"error": "forbidden"}, 403)
+    import weekly
+    r = weekly.run(force=bool(force))
+    for x in r["results"]: x["to"] = _mask(x["to"])   # 日志公开，脱敏
+    return r
+
+@app.get("/api/site")
+def site(domain: str = Query(...)):
+    """域名到期（RDAP，带缓存）+ 首页健康状况。"""
+    try: d, _ = norm(domain); netguard.resolve_safe(d)
+    except ValueError as e: return JSONResponse({"error": str(e)}, 400)
+    except netguard.NXDomain: return JSONResponse({"error": f"无法解析域名 {d}"}, 400)
+    except netguard.Forbidden as e: return JSONResponse({"error": str(e)}, 403)
+    import health
+    dom = health.domain_expiry(d); st = health.site_health(d)
+    return {"domain": d, "domain_expiry": dom, "health": st, "issues": health.issues({}, dom, st)}
 
 @app.get("/api/ct")
 def ct(domain: str = Query(...)):

@@ -54,3 +54,10 @@ API：`GET /api/check?domain=github.com`（支持 `host:port`、带 http(s):// �
 4. 在 Environment 填 `BASE_URL`（实际 onrender.com 地址）、`MAIL_FROM`、`RESEND_API_KEY` 或 SMTP 变量；`CRON_SECRET` 自动生成。
 5. 在 GitHub 仓库 Secrets 添加 `APP_URL`、`CRON_SECRET`，Actions 每天北京时间 9:00 调用 `/api/cron/run`。
 注意：免费实例 15 分钟无流量休眠（冷启动约 1 分钟）；**文件系统是临时的，重新部署/重启后 SQLite 订阅会丢失**——长期使用请把订阅换到 Render 免费 Postgres（30 天后过期）或外部免费数据库（如 Turso/Neon），或升级付费实例挂磁盘。
+
+## 每周健康周报（v2）
+- `GET /api/site?domain=` ：域名注册到期（RDAP，结果缓存在 `domain_cache` 表，成功 24h / 失败 6h）+ 首页 HTTPS 健康（状态码、响应时间、HTTP→HTTPS 跳转、HSTS），每一跳都过 SSRF 校验并直连校验过的 IP。
+- `POST /api/cron/weekly`（需 `x-cron-secret`，`?force=1` 忽略 6 天内已发送）：每个订阅邮箱一封周报，汇总其全部已确认域名。
+- `GET /api/unsubscribe-all?token=` ：退订该邮箱全部域名。
+- GitHub Actions `weekly-digest.yml`：每周一 01:00 UTC（北京时间 09:00），支持手动触发。
+- 数据库迁移只做新增：`domain_cache` 新表 + `subscriptions.last_digest_at` 新列。

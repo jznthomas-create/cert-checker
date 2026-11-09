@@ -14,14 +14,14 @@ table{width:100%;border-collapse:collapse;font-size:12px}td,th{border-bottom:1px
 <h1>🔒 TLS 证书检查</h1>
 <form id="f"><input type="text" id="d" placeholder="输入域名，如 github.com 或 example.com:8443" autofocus>
 <label><input type="checkbox" id="ct"> 同时查询 crt.sh 透明日志</label><button id="b">检查</button></form>
-<div id="out"></div><div id="ctout"></div>
-<div class="card"><b>📧 到期邮件提醒</b><p style="font-size:13px;color:#64748b">剩余 30/14/7/1 天及 CA 退出时提醒；需点击确认邮件后生效，每封邮件可一键退订。</p>
+<div id="out"></div><div id="siteout"></div><div id="ctout"></div>
+<div class="card"><b>📧 到期提醒 + 每周健康周报</b><p style="font-size:13px;color:#64748b">证书剩余 30/14/7/1 天及 CA 退出时即时提醒；<b>每周一早 9 点</b>再发一封周报，汇总你订阅的所有域名：证书剩余天数、域名注册到期、首页 HTTP 状态与响应时间、HTTPS 跳转/HSTS，有问题会标红。免费，需点击确认邮件后生效，可一键退订。</p>
 <form id="sf"><input type="text" id="se" placeholder="邮箱"><input type="text" id="sd" placeholder="域名"><button>订阅</button></form><div id="smsg" style="margin-top:8px;font-size:14px"></div></div></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s??'—').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt=s=>s?new Date(s).toLocaleString('zh-CN',{hour12:false}):'—';
 $('#f').onsubmit=async e=>{e.preventDefault();const d=$('#d').value.trim();if(!d)return;$('#b').disabled=true;
-$('#out').innerHTML='<div class="card">正在握手…</div>';$('#ctout').innerHTML='';
+$('#out').innerHTML='<div class="card">正在握手…</div>';$('#ctout').innerHTML='';loadSite(d);
 if($('#ct').checked)loadCT(d);
 try{const r=await fetch('/api/check?domain='+encodeURIComponent(d)),j=await r.json();
 if(!r.ok)throw new Error(j.error||r.status);render(j)}catch(x){$('#out').innerHTML=`<div class="card err">❌ ${esc(x.message)}</div>`}
@@ -44,6 +44,20 @@ h+=`<div class="card"><div class="kv">
 <div class="card"><b>证书链（服务器发送 ${j.chain.length} 张）</b><ol class="chain">${j.chain.map(c=>`<li><b>${esc(c.subject_cn||c.subject)}</b><br>
 <span class="mono">颁发者：${esc(c.issuer)}</span><br>有效期至 ${fmt(c.not_after)}（${c.days_left} 天）</li>`).join('')}</ol></div>`;
 $('#out').innerHTML=h}
+async function loadSite(d){$('#siteout').innerHTML='<div class="card">正在查询域名注册信息和网站状态…</div>';
+try{const r=await fetch('/api/site?domain='+encodeURIComponent(d)),j=await r.json();if(!r.ok)throw new Error(j.error);
+const x=j.domain_expiry,h=j.health,dd=x.days_left,dc=dd==null?'':dd<=30?'bad':dd<=60?'warn':'ok';
+const yn=(v,t,f)=>v==null?'<span>未知</span>':v?`<span class="ok">${t}</span>`:`<span class="warn">${f}</span>`;
+const hs=h.error?`<span class="bad">❌ ${esc(h.error)}</span>`:`<span class="${h.status>=400?'bad':'ok'}">HTTP ${h.status}</span>，${h.response_ms} ms${h.redirects?`，跳转到 <span class="mono">${esc(h.final_url)}</span>`:''}`;
+$('#siteout').innerHTML=`<div class="card"><b>🌐 域名与网站健康</b><div class="kv" style="margin-top:8px">
+<div>注册域名</div><div>${esc(x.registered_domain||j.domain)}${x.registrar?'（注册商：'+esc(x.registrar)+'）':''}</div>
+<div>域名到期</div><div class="${dc}">${dd==null?'未知（'+esc(x.error)+'）':`<b>${dd} 天</b>（${fmt(x.expires)}）`}</div>
+<div>首页状态</div><div>${hs}</div>
+<div>HTTP→HTTPS</div><div>${yn(h.https_redirect,'✅ 自动跳转','⚠️ 未自动跳转')}</div>
+<div>HSTS</div><div>${yn(h.hsts,'✅ 已设置','ℹ️ 未设置')}</div></div>
+${j.issues.length?'<ul style="font-size:13px;margin:8px 0 0">'+j.issues.map(([l,m])=>`<li class="${l=='info'?'':l}">${esc(m)}</li>`).join('')+'</ul>':''}
+<p style="font-size:12px;color:#64748b;margin:8px 0 0">想每周自动收到这份报告？在下方订阅周报。</p></div>`}
+catch(x){$('#siteout').innerHTML=`<div class="card err">域名/网站检查：${esc(x.message)}</div>`}}
 async function loadCT(d){$('#ctout').innerHTML='<div class="card">正在查询 crt.sh（可能需要十几秒）…</div>';
 try{const r=await fetch('/api/ct?domain='+encodeURIComponent(d)),j=await r.json();if(!r.ok)throw new Error(j.error);
 $('#ctout').innerHTML=`<div class="card"><b>crt.sh 未过期证书（共 ${j.total} 条，显示最近 ${j.items.length} 条）</b><table><tr><th>ID</th><th>签发时间</th><th>到期</th><th>名称</th><th>颁发者</th></tr>

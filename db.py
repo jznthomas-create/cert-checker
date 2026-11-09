@@ -22,7 +22,8 @@ def conn():
         with psycopg.connect(_url(), row_factory=dict_row, connect_timeout=10) as c:
             cur = c.cursor()
             if _url() not in _ready:
-                cur.execute(f"CREATE TABLE IF NOT EXISTS subscriptions(id SERIAL PRIMARY KEY, {COLS})"); _ready.add(_url())
+                cur.execute(f"CREATE TABLE IF NOT EXISTS subscriptions(id SERIAL PRIMARY KEY, {COLS})")
+                _migrate(cur, True); c.commit(); _ready.add(_url())
             yield cur, "%s"
     else:
         p = _sqlite_path(); os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -30,8 +31,20 @@ def conn():
         try:
             cur = c.cursor()
             cur.execute(f"CREATE TABLE IF NOT EXISTS subscriptions(id INTEGER PRIMARY KEY, {COLS})")
+            _migrate(cur, False)
             yield cur, "?"; c.commit()
         finally: c.close()
+
+CACHE_COLS = ["rdap_status", "rdap_domain", "rdap_expires", "rdap_registrar", "rdap_error", "rdap_checked_at"]
+
+def _migrate(cur, pg):
+    """只做新增：新列、新表；不改动已有数据。"""
+    cur.execute("CREATE TABLE IF NOT EXISTS domain_cache(domain TEXT PRIMARY KEY, " + ", ".join(c + " TEXT" for c in CACHE_COLS) + ")")
+    if pg: cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_digest_at TEXT")
+    else:
+        cur.execute("PRAGMA table_info(subscriptions)")
+        if "last_digest_at" not in {r["name"] for r in cur.fetchall()}:
+            cur.execute("ALTER TABLE subscriptions ADD COLUMN last_digest_at TEXT")
 
 def _q(sql, ph): return sql.replace("?", ph)
 def now(): return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -71,3 +84,22 @@ def stats():
     with conn() as (cur, ph):
         cur.execute("SELECT COUNT(*) AS total, COALESCE(SUM(verified),0) AS verified FROM subscriptions"); r = cur.fetchone()
         return {"backend": backend(), "total": int(r["total"]), "verified": int(r["verified"])}
+
+def cache_get(domain):
+    with conn() as (cur, ph): return _one(cur, ph, "SELECT * FROM domain_cache WHERE domain=?", (domain,))
+
+def cache_put(domain, **kw):
+    kw = {k: v for k, v in kw.items() if k in CACHE_COLS}
+    cols = ["domain", *kw]; vals = [domain, *kw.values()]
+    upd = ", ".join(f"{k}=excluded.{k}" for k in kw)
+    with conn() as (cur, ph):
+        cur.execute(_q(f"INSERT INTO domain_cache({','.join(cols)}) VALUES({','.join('?'*len(cols))}) "
+                       f"ON CONFLICT(domain) DO UPDATE SET {upd}", ph), vals)
+
+def unsubscribe_all(token):
+    """用任一退订 token 退订该邮箱的全部域名，返回 (email, 数量)。"""
+    with conn() as (cur, ph):
+        r = _one(cur, ph, "SELECT email FROM subscriptions WHERE unsub_token=?", (token,))
+        if not r: return None, 0
+        cur.execute(_q("DELETE FROM subscriptions WHERE email=?", ph), (r["email"],))
+        return r["email"], cur.rowcount

@@ -1,0 +1,19 @@
+# 每周一 09:00（北京时间）发送网站健康周报
+name: weekly-health-digest
+on:
+  schedule: [{ cron: "0 1 * * 1" }]   # UTC 01:00 周一 = 北京时间周一 09:00
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "忽略 6 天内已发送限制（1=是）"
+        default: "0"
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake up service
+        run: curl -fsS -m 120 --retry 5 --retry-delay 20 --retry-all-errors "${{ secrets.APP_URL }}/api/health"
+      - name: Send weekly digest
+        run: |
+          curl -fsS -m 300 --retry 2 --retry-delay 30 -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" "${{ secrets.APP_URL }}/api/cron/weekly?force=${{ github.event.inputs.force || '0' }}"
