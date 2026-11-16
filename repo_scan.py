@@ -15,6 +15,7 @@ API = "https://api.github.com"
 RAW = "https://raw.githubusercontent.com"
 UA = "cert-checker-repo-scan/1.0 (+https://cert-checker-h6lr.onrender.com)"
 CACHE_TTL = float(os.getenv("REPO_SCAN_CACHE_H", "6")) * 3600
+QUICK_TTL = 30 * 60  # 快速模式结果只缓存 30 分钟，额度恢复后尽快做完整扫描
 MAX_FILES = int(os.getenv("REPO_SCAN_MAX_FILES", "40"))
 MAX_BYTES = 256 * 1024
 
@@ -180,8 +181,9 @@ def scan(raw_repo: str, use_cache=True):
         if c:
             try:
                 age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(c["scanned_at"])).total_seconds()
-                if age < CACHE_TTL:
-                    res = json.loads(c["result"]); res["cached"] = True; return res
+                res = json.loads(c["result"])
+                if age < (QUICK_TTL if res.get("mode") == "quick" else CACHE_TTL):
+                    res["cached"] = True; return res
             except (ValueError, TypeError): pass
     if os.getenv("GITHUB_TOKEN"):  # 带 token 时显式确认仓库是公开的，避免扫到 token 能看到的私有仓库
         meta = _api(f"/repos/{full}")
