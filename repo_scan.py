@@ -138,7 +138,7 @@ def _api(path):
     except httpx.HTTPError as e: raise ScanError(f"连接 GitHub 失败：{type(e).__name__}", 502)
     if r.status_code in (403, 429) and (r.headers.get("x-ratelimit-remaining") == "0" or r.status_code == 429 or "rate limit" in r.text.lower()):
         reset = r.headers.get("x-ratelimit-reset"); wait = ""
-        try: wait = f"，约 {max(1, int((int(reset) - dt.datetime.now().timestamp()) // 60) + 1)} 分钟后恢复" if reset else ""
+        try: wait = f"，约 {min(60, max(1, int((int(reset) - dt.datetime.now().timestamp()) // 60) + 1))} 分钟后恢复" if reset else ""
         except ValueError: pass
         raise ScanError(f"GitHub 接口额度暂时用完{wait}，请稍后再试", 429)
     if r.status_code in (404, 451) or (r.status_code == 403 and "blocked" in r.text.lower()):
@@ -154,6 +154,21 @@ def _raw(full, ref, path):
         r = httpx.get(url, headers={"user-agent": UA}, timeout=10, follow_redirects=False)
         if r.status_code != 200: return None
         return r.content[:MAX_BYTES].decode("utf-8", "replace")
+    except httpx.HTTPError: return None
+
+QUICK_PATHS = [".env", ".env.local", ".env.production", ".env.prod", ".env.development", ".env.dev", ".env.staging", ".env.test",
+               ".claude/settings.local.json", ".claude/settings.json", ".cursor/mcp.json", ".mcp.json", "mcp.json", ".vscode/mcp.json",
+               ".windsurf/mcp.json", ".codeium/windsurf/mcp_config.json", ".continue/config.json", ".continue/config.yaml",
+               "credentials.json", "client_secret.json", "service-account.json", "id_rsa", "id_ed25519", "key.pem", "private.pem",
+               "server.key", ".npmrc", ".pypirc", ".netrc", ".git-credentials", ".docker/config.json", ".aws/credentials", ".envrc",
+               "config/secrets.yml", "config/master.key", "secrets.json", "secrets.yaml", "backend/.env", "server/.env", "api/.env",
+               "frontend/.env", "app/.env", "web/.env", "src/.env", "docker/.env", "terraform.tfvars"]
+
+def _repo_public(full):
+    try:
+        r = httpx.get(f"https://github.com/{full}", headers={"user-agent": UA}, timeout=10, follow_redirects=False)
+        if r.status_code in (200, 301, 302): return True
+        return False if r.status_code == 404 else None
     except httpx.HTTPError: return None
 
 def now(): return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -172,10 +187,19 @@ def scan(raw_repo: str, use_cache=True):
         meta = _api(f"/repos/{full}")
         if meta.get("private"): raise ScanError("只支持公开仓库", 403)
     # 未登录访问只能看到公开仓库；用 HEAD 指向默认分支，每次扫描只消耗 1 次 GitHub API 额度
-    branch = "HEAD"
-    tree = _api(f"/repos/{full}/git/trees/HEAD?recursive=1")
-    blobs = [t for t in tree.get("tree", []) if t.get("type") == "blob"]
-    cands = sorted((t for t in blobs if is_candidate(t["path"])), key=lambda t: (priority(t["path"]), t["path"]))
+    branch, mode = "HEAD", "full"
+    try:
+        tree = _api(f"/repos/{full}/git/trees/HEAD?recursive=1")
+        blobs = [t for t in tree.get("tree", []) if t.get("type") == "blob"]
+        cands = sorted((t for t in blobs if is_candidate(t["path"])), key=lambda t: (priority(t["path"]), t["path"]))
+    except ScanError as e:
+        if e.code != 429: raise
+        # 共享出口 IP 的 GitHub API 额度常被别人用完：退回“快速模式”，直接探测常见路径（不消耗 API 额度）
+        pub = _repo_public(full)
+        if pub is False: raise ScanError("仓库不存在或不是公开仓库（只支持公开仓库）", 404)
+        if pub is None: raise e   # github.com 也被限流：如实报告额度问题
+        mode, tree, blobs = "quick", {}, []
+        cands = [{"path": p, "size": 0} for p in QUICK_PATHS]
     skipped = max(0, len(cands) - MAX_FILES); cands = cands[:MAX_FILES]
     def one(t):
         if t.get("size", 0) > MAX_BYTES or t["path"].lower().endswith(BINARY_EXT):
@@ -183,8 +207,9 @@ def scan(raw_repo: str, use_cache=True):
         txt = _raw(full, branch, t["path"])
         return t["path"], txt, None if txt is not None else "下载失败"
     files, findings = [], []
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:
         for path, txt, note in ex.map(one, cands):
+            if mode == "quick" and txt is None: continue   # 快速模式下不存在的路径直接忽略
             fs = scan_text(path, txt) if txt is not None else []
             files.append({"path": path, "findings": len(fs), "note": note, "example": is_example(path)})
             findings += fs
@@ -193,7 +218,8 @@ def scan(raw_repo: str, use_cache=True):
            "files_scanned": len(files), "files": files, "files_skipped": skipped,
            "tree_truncated": bool(tree.get("truncated")), "total_files": len(blobs),
            "findings": findings[:200], "count": len(findings), "count_real": len(real),
-           "level": "bad" if real else ("warn" if findings else "ok"), "cached": False}
+           "level": "bad" if real else ("warn" if findings else "ok"), "cached": False, "mode": mode,
+           "quick_paths": len(QUICK_PATHS) if mode == "quick" else 0}
     db.repo_cache_put(full, json.dumps(res, ensure_ascii=False), res["scanned_at"])
     log.info("repo scan %s files=%d findings=%d", full, len(files), len(findings))  # 不记录任何内容
     return res

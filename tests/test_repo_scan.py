@@ -33,7 +33,7 @@ def mock_github(monkeypatch, files=FILES, meta=None, status=None, headers=None):
     calls = []
     def fake_get(url, headers_=None, **kw):
         calls.append(url)
-        assert url.startswith(("https://api.github.com/", "https://raw.githubusercontent.com/")), url
+        assert url.startswith(("https://api.github.com/", "https://raw.githubusercontent.com/", "https://github.com/")), url
         assert kw.get("follow_redirects") is False
         if status: return httpx.Response(status, headers=headers or {}, text="API rate limit exceeded")
         if url.endswith("/repos/acme/demo"):
@@ -143,3 +143,24 @@ def test_weekly_scan_error(monkeypatch):
 
 def test_page():
     assert "仓库密钥泄露扫描" in c.get("/repo-check").text and "/repo-check" in c.get("/").text
+
+def test_quick_mode_when_api_limited(monkeypatch):
+    """API 额度用完时退回快速模式：直接探测常见路径，不消耗 API。"""
+    seen = []
+    def fake_get(url, headers=None, **kw):
+        seen.append(url)
+        if url.startswith("https://api.github.com/"):
+            return httpx.Response(403, headers={"x-ratelimit-remaining": "0"}, text="API rate limit exceeded")
+        if url == "https://github.com/acme/demo": return httpx.Response(200)
+        if url == "https://github.com/acme/missing": return httpx.Response(404)
+        if url.startswith("https://raw.githubusercontent.com/acme/demo/HEAD/"):
+            from urllib.parse import unquote
+            p = unquote(url.split("/HEAD/", 1)[1])
+            if p in FILES: return httpx.Response(200, text=FILES[p])
+        return httpx.Response(404)
+    monkeypatch.setattr(R.httpx, "get", fake_get)
+    j = c.get("/api/repo-scan", params={"repo": "acme/demo"}).json()
+    assert j["mode"] == "quick" and j["files_scanned"] == 2 and j["count_real"] >= 4
+    assert {f["path"] for f in j["findings"]} == {".env", ".claude/settings.local.json"}
+    assert all(s not in json.dumps(j) for s in SECRETS)
+    assert c.get("/api/repo-scan", params={"repo": "acme/missing"}).status_code == 404

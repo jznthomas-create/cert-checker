@@ -32,7 +32,9 @@ if(real.length)h+=`<div class="card alert"><b class="bad">⚠️ 发现 ${j.coun
 else h+=`<div class="card"><b class="ok">✅ 高风险文件中未发现疑似泄露</b></div>`;
 if(ex.length)h+=`<div class="card"><b class="warn">ℹ️ 示例/测试文件中有 ${ex.length} 处类似密钥的内容</b><p class="muted">通常是占位符或演示用值，但也请确认不是真实密钥。</p>
 <table>${ex.slice(0,30).map(f=>`<tr><td class="mono">${esc(f.path)}</td><td>${f.line}</td><td>${esc(f.type)}</td><td class="mono">${esc(f.preview)}</td></tr>`).join('')}</table></div>`;
-h+=`<div class="card muted">仓库 <a href="${esc(j.url)}" target="_blank">${esc(j.repo)}</a>（默认分支）共 ${j.total_files} 个文件，扫描了其中 ${j.files_scanned} 个高风险文件${j.files_skipped?`，另有 ${j.files_skipped} 个超出上限未扫描`:''}${j.tree_truncated?'；仓库过大，文件列表不完整':''}。
+h+=`<div class="card muted">仓库 <a href="${esc(j.url)}" target="_blank">${esc(j.repo)}</a>（默认分支）${j.mode==='quick'
+?`：GitHub 接口额度暂时受限，本次为<b>快速模式</b>，只检查了 ${j.quick_paths} 个最常见的泄露路径（存在 ${j.files_scanned} 个），稍后重试可做完整扫描。`
+:`共 ${j.total_files} 个文件，扫描了其中 ${j.files_scanned} 个高风险文件${j.files_skipped?`，另有 ${j.files_skipped} 个超出上限未扫描`:''}${j.tree_truncated?'；仓库过大，文件列表不完整':''}。`}
 扫描时间 ${new Date(j.scanned_at).toLocaleString('zh-CN',{hour12:false})}${j.cached?'（缓存结果）':''}。
 ${j.files.length?'<details><summary>扫描的文件</summary><ul>'+j.files.map(f=>`<li class="mono">${esc(f.path)}${f.note?' — '+esc(f.note):''}</li>`).join('')+'</ul></details>':''}</div>`;
 $('#out').innerHTML=h;$('#subcard').style.display='block'}
