@@ -61,3 +61,8 @@ API：`GET /api/check?domain=github.com`（支持 `host:port`、带 http(s):// �
 - `GET /api/unsubscribe-all?token=` ：退订该邮箱全部域名。
 - GitHub Actions `weekly-digest.yml`：每周一 01:00 UTC（北京时间 09:00），支持手动触发。
 - 数据库迁移只做新增：`domain_cache` 新表 + `subscriptions.last_digest_at` 新列。
+
+## GitHub 公开仓库密钥泄露扫描（/repo-check）
+- `GET /api/repo-scan?repo=owner/repo`：只读扫描默认分支中的高风险文件（`.env*`、`.claude/`、`.cursor/`、`.mcp.json`、`credentials.json`、`id_rsa`、`*.pem` 等），每次扫描只用 1 次 GitHub API（git tree），文件内容走 raw.githubusercontent.com。结果缓存 6 小时（`REPO_SCAN_CACHE_H`），仅保存脱敏结果。
+- 每 IP 每分钟最多 4 次未命中缓存的扫描（`REPO_SCAN_PER_MIN`）。可选 `GITHUB_TOKEN`（只读）提高 GitHub 额度。
+- `POST /api/repo/subscribe {email, repo}` → 确认邮件；每周一随 `/api/cron/weekly` 重新扫描并发送周报。

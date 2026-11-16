@@ -37,8 +37,13 @@ def conn():
 
 CACHE_COLS = ["rdap_status", "rdap_domain", "rdap_expires", "rdap_registrar", "rdap_error", "rdap_checked_at"]
 
+REPO_SUB_COLS = """email TEXT NOT NULL, repo TEXT NOT NULL, verified INTEGER DEFAULT 0, confirm_token TEXT,
+    unsub_token TEXT NOT NULL, created_at TEXT, last_digest_at TEXT, UNIQUE(email, repo)"""
+
 def _migrate(cur, pg):
     """只做新增：新列、新表；不改动已有数据。"""
+    cur.execute("CREATE TABLE IF NOT EXISTS repo_scan_cache(repo TEXT PRIMARY KEY, result TEXT, scanned_at TEXT)")
+    cur.execute(f"CREATE TABLE IF NOT EXISTS repo_subs(id {'SERIAL' if pg else 'INTEGER'} PRIMARY KEY, {REPO_SUB_COLS})")
     cur.execute("CREATE TABLE IF NOT EXISTS domain_cache(domain TEXT PRIMARY KEY, " + ", ".join(c + " TEXT" for c in CACHE_COLS) + ")")
     if pg: cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_digest_at TEXT")
     else:
@@ -107,4 +112,48 @@ def unsubscribe_all(token):
 def confirm_email(email):
     with conn() as (cur, ph):
         cur.execute(_q("UPDATE subscriptions SET verified=1, confirm_token=NULL WHERE email=? AND verified=0", ph), (email,))
+        return cur.rowcount
+
+# ---------- 仓库扫描：缓存 + 周报订阅（独立新表） ----------
+def repo_cache_get(repo):
+    with conn() as (cur, ph): return _one(cur, ph, "SELECT * FROM repo_scan_cache WHERE repo=?", (repo,))
+
+def repo_cache_put(repo, result, scanned_at):
+    with conn() as (cur, ph):
+        cur.execute(_q("INSERT INTO repo_scan_cache(repo,result,scanned_at) VALUES(?,?,?) "
+                       "ON CONFLICT(repo) DO UPDATE SET result=excluded.result, scanned_at=excluded.scanned_at", ph),
+                    (repo, result, scanned_at))
+
+def repo_sub_add(email, repo):
+    with conn() as (cur, ph):
+        r = _one(cur, ph, "SELECT * FROM repo_subs WHERE email=? AND repo=?", (email, repo))
+        if r: return r, False
+        n = _one(cur, ph, "SELECT COUNT(*) AS n FROM repo_subs WHERE email=?", (email,))["n"]
+        if n >= int(os.getenv("MAX_REPOS_PER_EMAIL", "10")): raise ValueError("该邮箱订阅的仓库数量已达上限")
+        cur.execute(_q("INSERT INTO repo_subs(email,repo,confirm_token,unsub_token,created_at) VALUES(?,?,?,?,?)", ph),
+                    (email, repo, secrets.token_urlsafe(24), secrets.token_urlsafe(24), now()))
+        return _one(cur, ph, "SELECT * FROM repo_subs WHERE email=? AND repo=?", (email, repo)), True
+
+def repo_sub_confirm(token):
+    with conn() as (cur, ph):
+        r = _one(cur, ph, "SELECT * FROM repo_subs WHERE confirm_token=?", (token,))
+        if r: cur.execute(_q("UPDATE repo_subs SET verified=1, confirm_token=NULL WHERE id=?", ph), (r["id"],))
+        return r
+
+def repo_sub_unsubscribe(token):
+    with conn() as (cur, ph):
+        r = _one(cur, ph, "SELECT * FROM repo_subs WHERE unsub_token=?", (token,))
+        if r: cur.execute(_q("DELETE FROM repo_subs WHERE id=?", ph), (r["id"],))
+        return r
+
+def repo_subs_verified():
+    with conn() as (cur, ph): cur.execute("SELECT * FROM repo_subs WHERE verified=1 ORDER BY id"); return cur.fetchall()
+
+def repo_sub_update(id_, **kw):
+    with conn() as (cur, ph):
+        cur.execute(_q(f"UPDATE repo_subs SET {', '.join(k+'=?' for k in kw)} WHERE id=?", ph), (*kw.values(), id_))
+
+def repo_sub_confirm_email(email):
+    with conn() as (cur, ph):
+        cur.execute(_q("UPDATE repo_subs SET verified=1, confirm_token=NULL WHERE email=? AND verified=0", ph), (email,))
         return cur.rowcount

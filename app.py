@@ -186,6 +186,11 @@ def cron_weekly(request: Request, force: int = 0):
     import weekly
     r = weekly.run(force=bool(force))
     for x in r["results"]: x["to"] = _mask(x["to"])   # 日志公开，脱敏
+    import repo_weekly
+    try: rr = repo_weekly.run(force=bool(force))
+    except Exception as e: rr = {"error": type(e).__name__}
+    for x in rr.get("results", []): x["to"] = _mask(x["to"])
+    r["repos"] = rr
     return r
 
 @app.post("/api/cron/admin-confirm")
@@ -194,7 +199,7 @@ def admin_confirm(request: Request, payload: dict = Body(...)):
     if not _cron_ok(request): return JSONResponse({"error": "forbidden"}, 403)
     email = str(payload.get("email", "")).strip().lower()
     if not EMAIL_RE.match(email): return JSONResponse({"error": "邮箱格式无效"}, 400)
-    return {"confirmed": db.confirm_email(email)}
+    return {"confirmed": db.confirm_email(email), "repos_confirmed": db.repo_sub_confirm_email(email)}
 
 @app.get("/api/site")
 def site(domain: str = Query(...)):
@@ -223,3 +228,52 @@ def ct(domain: str = Query(...)):
 def health():
     try: return {"ok": True, "storage": db.stats()}
     except Exception as e: return JSONResponse({"ok": False, "storage_backend": db.backend(), "error": type(e).__name__}, 500)
+
+
+# ---------- 公开仓库密钥泄露扫描 ----------
+import repo_scan
+scan_limiter = RateLimiter(limit=int(os.getenv("REPO_SCAN_PER_MIN", "4")))
+
+@app.get("/repo-check")
+def repo_page(): return FileResponse(BASE / "static" / "repo.html")
+
+@app.get("/api/repo-scan")
+def repo_scan_api(request: Request, repo: str = Query(..., max_length=300)):
+    try: full = repo_scan.parse_repo(repo)
+    except repo_scan.ScanError as e: return JSONResponse({"error": e.msg}, e.code)
+    c = db.repo_cache_get(full)
+    if not c:  # 只有真正请求 GitHub 时才计入严格限流
+        ok, retry = scan_limiter.allow(client_ip(request))
+        if not ok: return JSONResponse({"error": f"扫描过于频繁，请 {retry} 秒后再试"}, 429, headers={"Retry-After": str(retry)})
+    try: res = repo_scan.scan(full)
+    except repo_scan.ScanError as e: return JSONResponse({"error": e.msg}, e.code)
+    res["advice"] = repo_scan.ADVICE if res["count"] else []
+    return res
+
+@app.post("/api/repo/subscribe")
+def repo_subscribe(payload: dict = Body(...)):
+    email = str(payload.get("email", "")).strip().lower()
+    if not EMAIL_RE.match(email): return JSONResponse({"error": "邮箱格式无效"}, 400)
+    try: full = repo_scan.parse_repo(str(payload.get("repo", "")))
+    except repo_scan.ScanError as e: return JSONResponse({"error": e.msg}, e.code)
+    if not db.repo_cache_get(full): return JSONResponse({"error": "请先扫描一次该仓库，再订阅周报"}, 400)
+    try: row, _ = db.repo_sub_add(email, full)
+    except ValueError as e: return JSONResponse({"error": str(e)}, 400)
+    if row["verified"]: return {"ok": True, "message": "已订阅该仓库的每周扫描"}
+    link = f"{BASE_URL}/api/repo/confirm?token={row['confirm_token']}"
+    sent = mailer.send(email, f"请确认订阅 {full} 的每周密钥泄露扫描",
+                f"你（或他人用你的邮箱）订阅了 GitHub 公开仓库 {full} 的每周密钥泄露扫描。\n确认订阅请打开：{link}\n如非本人操作，忽略本邮件即可。")
+    resp = {"ok": True, "message": "确认邮件已发送，请点击邮件中的链接完成订阅", "mail_sent": bool(sent)}
+    if not sent: resp["message"] = "已记录订阅，但确认邮件暂时发送失败（邮件服务配置中），请稍后重试"
+    if mailer.mode() == "log" and os.getenv("DEV_EXPOSE_LINKS") == "1": resp["confirm_url"] = link
+    return resp
+
+@app.get("/api/repo/confirm")
+def repo_confirm(token: str):
+    r = db.repo_sub_confirm(token)
+    return page(f"✅ 已确认订阅 {r['repo']} 的每周密钥扫描" if r else "链接无效或已使用")
+
+@app.get("/api/repo/unsubscribe")
+def repo_unsubscribe(token: str):
+    r = db.repo_sub_unsubscribe(token)
+    return page(f"已退订 {r['repo']}" if r else "链接无效或已退订")

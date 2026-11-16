@@ -1,0 +1,42 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GitHub 仓库密钥泄露扫描</title><style>
+body{font-family:-apple-system,"PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;background:#f5f7fa;color:#1f2937;margin:0}
+.wrap{max-width:900px;margin:32px auto;padding:0 16px}h1{font-size:22px}a{color:#2563eb}
+form{display:flex;gap:8px;flex-wrap:wrap}input[type=text]{flex:1;min-width:240px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:15px}
+button{padding:10px 18px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:15px;cursor:pointer}button:disabled{opacity:.5}
+.card{background:#fff;border-radius:10px;padding:16px 20px;margin-top:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.ok{color:#16a34a}.warn{color:#d97706}.bad{color:#dc2626}.err{background:#fef2f2;color:#b91c1c}.muted{color:#64748b;font-size:13px}
+.alert{background:#fef2f2;border-left:4px solid #dc2626}code,.mono{font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{border-bottom:1px solid #e5e7eb;padding:6px;text-align:left;vertical-align:top}
+</style></head><body><div class="wrap">
+<p class="muted"><a href="/">← TLS 证书 / 域名检查</a></p>
+<h1>🔑 GitHub 仓库密钥泄露扫描</h1>
+<p class="muted">AI 编程工具（Claude Code、Cursor 等）常把 API 密钥写进 <code>.claude/settings.local.json</code>、<code>.cursor/mcp.json</code>、<code>.env</code> 并被一起提交。输入一个<b>公开</b>仓库，检查默认分支里这些高风险文件。密钥只显示脱敏预览，不会保存完整内容。</p>
+<form id="f"><input type="text" id="r" placeholder="owner/repo 或 https://github.com/owner/repo" autofocus><button id="b">扫描</button></form>
+<div id="out"></div>
+<div class="card" id="subcard" style="display:none"><b>📧 每周自动复查</b><p class="muted">每周一早 9 点重新扫描该仓库，把结果发到你的邮箱。免费，需点击确认邮件后生效，可一键退订。</p>
+<form id="sf"><input type="text" id="se" placeholder="邮箱"><button>订阅</button></form><div id="smsg" style="margin-top:8px;font-size:14px"></div></div>
+<p class="muted" style="margin-top:24px">只读访问 GitHub 公开接口；扫描路径包括 .env*、.claude/、.cursor/、.mcp.json、credentials.json、id_rsa、*.pem 等。可能有误报，也不能保证发现全部泄露（不扫描 Git 历史）。</p>
+</div><script>
+const $=s=>document.querySelector(s),esc=s=>String(s??'—').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let cur=null;
+const q=new URLSearchParams(location.search).get('repo');if(q){$('#r').value=q;setTimeout(()=>$('#f').requestSubmit(),0)}
+$('#f').onsubmit=async e=>{e.preventDefault();const v=$('#r').value.trim();if(!v)return;$('#b').disabled=true;
+$('#out').innerHTML='<div class="card">正在扫描（通常 5–20 秒）…</div>';$('#subcard').style.display='none';
+try{const r=await fetch('/api/repo-scan?repo='+encodeURIComponent(v)),j=await r.json();if(!r.ok)throw new Error(j.error||r.status);render(j)}
+catch(x){$('#out').innerHTML=`<div class="card err">❌ ${esc(x.message)}</div>`}$('#b').disabled=false};
+function render(j){cur=j.repo;const real=j.findings.filter(f=>!f.example),ex=j.findings.filter(f=>f.example);let h='';
+if(real.length)h+=`<div class="card alert"><b class="bad">⚠️ 发现 ${j.count_real} 处疑似泄露的密钥</b>
+<table><tr><th>文件</th><th>行</th><th>类型</th><th>脱敏预览</th></tr>${real.map(f=>`<tr><td class="mono"><a href="${esc(j.url)}/blob/${encodeURIComponent(j.branch)}/${f.path.split('/').map(encodeURIComponent).join('/')}#L${f.line}" target="_blank">${esc(f.path)}</a></td><td>${f.line}</td><td>${esc(f.type)}</td><td class="mono">${esc(f.preview)}</td></tr>`).join('')}</table>
+<b>处理建议</b><ol>${j.advice.map(a=>`<li>${esc(a)}</li>`).join('')}</ol></div>`;
+else h+=`<div class="card"><b class="ok">✅ 高风险文件中未发现疑似泄露</b></div>`;
+if(ex.length)h+=`<div class="card"><b class="warn">ℹ️ 示例/测试文件中有 ${ex.length} 处类似密钥的内容</b><p class="muted">通常是占位符或演示用值，但也请确认不是真实密钥。</p>
+<table>${ex.slice(0,30).map(f=>`<tr><td class="mono">${esc(f.path)}</td><td>${f.line}</td><td>${esc(f.type)}</td><td class="mono">${esc(f.preview)}</td></tr>`).join('')}</table></div>`;
+h+=`<div class="card muted">仓库 <a href="${esc(j.url)}" target="_blank">${esc(j.repo)}</a>（默认分支）共 ${j.total_files} 个文件，扫描了其中 ${j.files_scanned} 个高风险文件${j.files_skipped?`，另有 ${j.files_skipped} 个超出上限未扫描`:''}${j.tree_truncated?'；仓库过大，文件列表不完整':''}。
+扫描时间 ${new Date(j.scanned_at).toLocaleString('zh-CN',{hour12:false})}${j.cached?'（缓存结果）':''}。
+${j.files.length?'<details><summary>扫描的文件</summary><ul>'+j.files.map(f=>`<li class="mono">${esc(f.path)}${f.note?' — '+esc(f.note):''}</li>`).join('')+'</ul></details>':''}</div>`;
+$('#out').innerHTML=h;$('#subcard').style.display='block'}
+$('#sf').onsubmit=async e=>{e.preventDefault();$('#smsg').textContent='提交中…';
+try{const r=await fetch('/api/repo/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:$('#se').value,repo:cur})}),j=await r.json();
+$('#smsg').innerHTML=r.ok?`<span class="${j.mail_sent===false?'warn':'ok'}">${esc(j.message)}</span>`:'<span class="bad">'+esc(j.error)+'</span>'}catch(x){$('#smsg').textContent=x.message}};
+</script></body></html>
