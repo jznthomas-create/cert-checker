@@ -277,3 +277,41 @@ def repo_confirm(token: str):
 def repo_unsubscribe(token: str):
     r = db.repo_sub_unsubscribe(token)
     return page(f"已退订 {r['repo']}" if r else "链接无效或已退订")
+
+
+# ---------- vibe-coded 应用 Supabase 数据暴露扫描 ----------
+import supabase_scan as sbs
+sb_limiter = RateLimiter(limit=int(os.getenv("SB_SCAN_PER_MIN", "3")))
+sb_mail_limiter = RateLimiter(limit=int(os.getenv("SB_MAIL_PER_HOUR", "5")), window=3600)
+
+@app.get("/supabase-check")
+def supabase_page(): return FileResponse(BASE / "static" / "supabase.html")
+
+@app.post("/api/supabase/token")
+def supabase_token(payload: dict = Body(...)):
+    try: host = sbs.parse_site(str(payload.get("site", ""))[:300])
+    except sbs.ScanError as e: return JSONResponse({"error": e.msg}, e.code)
+    return sbs.instructions(host)
+
+@app.post("/api/supabase/scan")
+def supabase_scan_api(request: Request, payload: dict = Body(...)):
+    site = str(payload.get("site", ""))[:300]
+    try: sbs.parse_site(site)
+    except sbs.ScanError as e: return JSONResponse({"error": e.msg}, e.code)
+    ok, retry = sb_limiter.allow(client_ip(request))
+    if not ok: return JSONResponse({"error": f"扫描过于频繁，请 {retry} 秒后再试"}, 429, headers={"Retry-After": str(retry)})
+    try: return sbs.scan(site, deep=bool(payload.get("deep")))
+    except sbs.ScanError as e: return JSONResponse({"error": e.msg}, e.code)
+    except netguard.Forbidden as e: return JSONResponse({"error": str(e)}, 403)
+
+@app.post("/api/supabase/email")
+def supabase_email(request: Request, payload: dict = Body(...)):
+    email = str(payload.get("email", "")).strip().lower()
+    if not EMAIL_RE.match(email): return JSONResponse({"error": "邮箱格式无效"}, 400)
+    r = sbs.fetch_stash(str(payload.get("report_id", ""))[:40])
+    if not r: return JSONResponse({"error": "报告已过期，请重新扫描"}, 404)
+    ok, retry = sb_mail_limiter.allow(client_ip(request))
+    if not ok: return JSONResponse({"error": f"发送过于频繁，请 {retry // 60 + 1} 分钟后再试"}, 429)
+    sent = mailer.send(email, f"Supabase 数据暴露扫描报告：{r['host']}", sbs.report_text(r))
+    if not sent: return JSONResponse({"ok": False, "mail_sent": False, "message": "邮件暂时发送失败（邮件服务配置中），请先复制页面上的报告"}, 503)
+    return {"ok": True, "mail_sent": True, "message": "报告已发送到你的邮箱"}

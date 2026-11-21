@@ -1,0 +1,59 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supabase 数据暴露扫描（Lovable / Bolt / v0 应用）</title><style>
+body{font-family:-apple-system,"PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;background:#f5f7fa;color:#1f2937;margin:0}
+.wrap{max-width:900px;margin:32px auto;padding:0 16px}h1{font-size:22px}a{color:#2563eb}
+form{display:flex;gap:8px;flex-wrap:wrap}input[type=text]{flex:1;min-width:240px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:15px}
+button{padding:10px 18px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:15px;cursor:pointer}button:disabled{opacity:.5}
+button.sec{background:#475569}
+.card{background:#fff;border-radius:10px;padding:16px 20px;margin-top:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.ok{color:#16a34a}.warn{color:#d97706}.bad{color:#dc2626}.err{background:#fef2f2;color:#b91c1c}.muted{color:#64748b;font-size:13px}
+.alert{background:#fef2f2;border-left:4px solid #dc2626}code,.mono,pre{font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}
+pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;white-space:pre-wrap}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{border-bottom:1px solid #e5e7eb;padding:6px;text-align:left;vertical-align:top}
+.sev{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;color:#fff}
+.critical{background:#b91c1c}.high{background:#ea580c}.medium{background:#d97706}.low{background:#64748b}.info{background:#2563eb}
+</style></head><body><div class="wrap">
+<p class="muted"><a href="/">← TLS 证书 / 域名检查</a> · <a href="/repo-check">GitHub 仓库密钥扫描</a></p>
+<h1>🛡️ Supabase 数据暴露扫描</h1>
+<p class="muted">用 Lovable、Bolt、v0 等 AI 工具做的网站，常把 Supabase 的 anon key 放在前端，但忘了开启行级安全（RLS），导致任何人都能读出用户邮箱、手机号等数据。输入<b>你自己的</b>网站：</p>
+<form id="f"><input type="text" id="s" placeholder="https://your-app.lovable.app 或 example.com" autofocus><button id="b">被动扫描</button></form>
+<p class="muted">被动扫描只读取首页和同源 JS，检查是否暴露 Supabase key（尤其是 service_role）。<b>深度检测</b>（逐表检查能否被匿名读取）需要先证明网站是你的。</p>
+<div id="out"></div>
+<div class="card" id="vcard" style="display:none"><b>🔐 验证所有权后做深度检测</b>
+<p class="muted">任选一种方式放置验证码，然后点「验证并深度检测」。深度检测只做只读请求（GET/HEAD），不会写入、修改或下载你的数据，只显示表名、列名和行数。</p>
+<div id="vinfo"></div><button id="vb" style="margin-top:10px">验证并深度检测</button><div id="vmsg" style="margin-top:8px;font-size:14px"></div></div>
+<div class="card" id="mcard" style="display:none"><b>📧 把报告发到邮箱</b>
+<form id="mf" style="margin-top:8px"><input type="text" id="me" placeholder="邮箱"><button class="sec">发送</button></form><div id="mmsg" style="margin-top:8px;font-size:14px"></div></div>
+<p class="muted" style="margin-top:24px">只识别 *.supabase.co 项目；完整密钥不会显示、保存或记录。被动扫描最多检查 25 个同源脚本。本工具仅用于检查你有权测试的网站。</p>
+</div><script>
+const $=s=>document.querySelector(s),esc=s=>String(s??'—').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const SEV={critical:'严重',high:'高',medium:'中',low:'低',info:'提示'};let cur=null,rid=null;
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});const j=await r.json();if(!r.ok&&!j.message)throw new Error(j.error||r.status);return [r,j]}
+async function run(deep){const v=deep?cur:$('#s').value.trim();if(!v)return;$('#b').disabled=$('#vb').disabled=true;
+$('#out').innerHTML=`<div class="card">${deep?'正在验证并深度检测（通常 10–40 秒）…':'正在扫描（通常 5–30 秒）…'}</div>`;
+try{const [,j]=await post('/api/supabase/scan',{site:v,deep});cur=j.host;rid=j.report_id;render(j);
+if(!j.deep){const [,t]=await post('/api/supabase/token',{site:j.host});showToken(t)}else $('#vcard').style.display='none';
+$('#mcard').style.display='block'}
+catch(x){$('#out').innerHTML=`<div class="card err">❌ ${esc(x.message)}</div>`}$('#b').disabled=$('#vb').disabled=false}
+$('#f').onsubmit=e=>{e.preventDefault();$('#vmsg').textContent='';run(false)};
+$('#vb').onclick=()=>run(true);
+function showToken(t){$('#vcard').style.display='block';$('#vinfo').innerHTML=`<ol style="font-size:14px">
+<li>上传文件 <code>${esc(t.methods[0].url)}</code>，内容为：<pre>${esc(t.token)}</pre></li>
+<li>或在首页 &lt;head&gt; 中加入：<pre>${esc(t.methods[1].content)}</pre></li>
+<li>或添加 DNS TXT 记录 <code>${esc(t.methods[2].name)}</code>，值为 <code>${esc(t.token)}</code></li></ol>`}
+function render(j){const p=j.passive,r=j.report,s=r.summary;let h='';
+if(j.verification){const v=j.verification;$('#vmsg').innerHTML=v.ok?`<span class="ok">✅ 已通过验证（${esc(v.method)}）</span>`:`<span class="bad">${esc(v.error)}</span>${v.tried?'<div class="muted">'+v.tried.map(esc).join('；')+'</div>':''}`}
+const bad=s.critical+s.high;
+h+=`<div class="card ${bad?'alert':''}"><b>${!j.found_supabase?'<span class="ok">✅ 未在公开页面/JS 中发现 Supabase 配置</span>':bad?`<span class="bad">⚠️ 发现 ${bad} 个严重/高危问题</span>`:'<span class="warn">发现 Supabase 配置</span>'}</b>
+<p>${Object.keys(SEV).map(k=>`<span class="sev ${k}">${SEV[k]} ${s[k]}</span>`).join(' ')}</p>
+${r.findings.length?`<table>${r.findings.map(f=>`<tr><td style="width:56px"><span class="sev ${f.severity}">${SEV[f.severity]}</span></td><td><b>${esc(f.title)}</b><div class="muted mono">${esc(f.detail)}</div></td></tr>`).join('')}</table>`:''}
+${j.deep_note?`<p class="warn">${esc(j.deep_note)}</p>`:''}</div>`;
+if(j.deep_result&&j.deep_result.tables.length){h+=`<div class="card"><b>逐表检查（项目 ${esc(j.deep_result.project)}）</b><table><tr><th>表</th><th>匿名可读</th><th>行数</th><th>疑似敏感列</th></tr>
+${j.deep_result.tables.map(t=>`<tr><td class="mono">${esc(t.name)}</td><td>${t.rows_visible?'<b class="bad">是</b>':t.readable?'<span class="warn">可访问/无数据</span>':'<span class="ok">否</span>'}</td><td>${t.count??'—'}</td><td class="mono">${esc(t.pii_columns.join(', ')||'')}</td></tr>`).join('')}</table></div>`}
+if(r.advice.length)h+=`<div class="card"><b>修复建议</b><ol>${r.advice.map(a=>`<li>${esc(a)}</li>`).join('')}</ol>${r.sql_example?`<details><summary>示例 SQL（开启 RLS 与策略）</summary><pre>${esc(r.sql_example)}</pre></details>`:''}</div>`;
+h+=`<div class="card muted">站点 ${esc(j.host)}${j.final_host!==j.host?' → '+esc(j.final_host):''}（HTTP ${esc(p.status)}），检查了 ${p.scripts.length} 个同源脚本${p.projects.length?'，Supabase 项目：'+p.projects.map(esc).join('、'):''}。${p.notes.map(esc).join('；')}
+扫描时间 ${new Date(j.scanned_at).toLocaleString('zh-CN',{hour12:false})}。</div>`;
+$('#out').innerHTML=h}
+$('#mf').onsubmit=async e=>{e.preventDefault();$('#mmsg').textContent='发送中…';
+try{const [r,j]=await post('/api/supabase/email',{email:$('#me').value,report_id:rid});$('#mmsg').innerHTML=`<span class="${j.mail_sent?'ok':'warn'}">${esc(j.message||j.error)}</span>`}catch(x){$('#mmsg').innerHTML='<span class="bad">'+esc(x.message)+'</span>'}};
+</script></body></html>

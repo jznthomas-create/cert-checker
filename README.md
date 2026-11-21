@@ -66,3 +66,10 @@ API：`GET /api/check?domain=github.com`（支持 `host:port`、带 http(s):// �
 - `GET /api/repo-scan?repo=owner/repo`：只读扫描默认分支中的高风险文件（`.env*`、`.claude/`、`.cursor/`、`.mcp.json`、`credentials.json`、`id_rsa`、`*.pem` 等），每次扫描只用 1 次 GitHub API（git tree），文件内容走 raw.githubusercontent.com。结果缓存 6 小时（`REPO_SCAN_CACHE_H`），仅保存脱敏结果。
 - 每 IP 每分钟最多 4 次未命中缓存的扫描（`REPO_SCAN_PER_MIN`）。可选 `GITHUB_TOKEN`（只读）提高 GitHub 额度。
 - `POST /api/repo/subscribe {email, repo}` → 确认邮件；每周一随 `/api/cron/weekly` 重新扫描并发送周报。
+
+## Supabase 数据暴露扫描（/supabase-check）
+
+面向 Lovable / Bolt / v0 等 vibe-coded 应用：
+- **被动扫描**（无需验证）：抓首页 + 同源 JS（≤25 个、单个 ≤3MB、总量 ≤12MB、逐跳 SSRF 校验），识别 `*.supabase.co`、anon JWT、`sb_publishable_`，以及误暴露的 `service_role` / `sb_secret_`（严重）。key 一律脱敏。
+- **深度检测**（必须先验证所有权：`/.well-known/cert-checker-verify.txt`、首页 `<meta name="cert-checker-verify">` 或 DNS TXT `_cert-checker-verify.<host>`；验证码 = HMAC(VERIFY_SECRET 或 CRON_SECRET, host)）：只发 GET/HEAD 到 `<ref>.supabase.co`：OpenAPI 列表 → 每表 `limit=1`（≤30 张）→ `Prefer: count=exact` 计数 → PII 列名标记；列出 storage bucket。不返回行数据，不调 RPC，不写入。
+- 接口：`POST /api/supabase/scan {site, deep}`、`POST /api/supabase/token {site}`、`POST /api/supabase/email {email, report_id}`（报告内存暂存 1 小时）。限流：`SB_SCAN_PER_MIN`（默认 3）、`SB_MAIL_PER_HOUR`（默认 5）。
